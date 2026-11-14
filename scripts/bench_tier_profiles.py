@@ -8,8 +8,8 @@ engine is spawned and stopped by this script; nothing else is touched.
     python bench_tier_profiles.py --pairs 1
 
 Profiles are the knobs `fennec serve` exposes for placement: the resource policy,
-the VRAM budget, the host-RAM expert pool (COLI_VK_TIER_HOST_GB, alias
-FENNEC_VK_TIER_HOST_GB) and the CPU thread count. NPU is absent on purpose:
+the VRAM budget, the host-RAM expert pool (FENNEC_VK_TIER_HOST_GB, alias
+COLI_VK_TIER_HOST_GB) and the CPU thread count. NPU is absent on purpose:
 `--xdna` is AMD-only and the Intel NPU has no path into the engine.
 
 The engine is resolved by engine_paths: Fennec's native binary self-launches,
@@ -30,7 +30,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from engine_paths import (EngineError, default_engine_root, env_alias, resolve,
+from engine_paths import (EngineError, default_engine_root, env_alias, pin, resolve,
                           serve_command, strip_engine_vars)
 
 RESULTS = Path(__file__).resolve().parents[1] / "results"
@@ -132,7 +132,12 @@ def run_profile(name, extra_env, extra_args, args, engine):
     base = f"http://127.0.0.1:{port}"
     log = RESULTS / f"tier-{name.replace(' ', '-').replace('+', '')}.log"
     env = strip_engine_vars(os.environ)
-    env.update(extra_env, COLI_API_KEY="local", PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    # The profiles are written in the COLI_* names they were measured under;
+    # pin sets each knob under both spellings so Fennec reads its own name too.
+    for key, value in extra_env.items():
+        pin(env, key.removeprefix("COLI_"), value)
+    pin(env, "API_KEY", "local")
+    env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     command = serve_command(engine, args.model, port,
                             extra=["--ctx", str(args.ctx), "--ngen", str(args.ngen), *extra_args],
                             api_key="local")

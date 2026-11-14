@@ -19,8 +19,8 @@ from typing import NamedTuple
 FENNEC = "fennec"
 COLIBRI = "colibri"
 
-# Engine knobs Fennec still reads under the Colibri spelling. FENNEC_* is accepted
-# as an alias; COLI_* wins when both are set, so an existing setup keeps working.
+# Engine knobs the two engines share. FENNEC_* is the spelling and wins when both
+# are set; COLI_* is the alias, and the only name a Colibri checkout reads.
 ALIASES = ("MODEL", "API_KEY", "VULKAN", "METAL", "CUDA",
            "VK_TIER_HOST_GB", "VK_TIER_GB", "VK_DEV2")
 FENNEC_VARS = frozenset("FENNEC_" + name for name in ALIASES)
@@ -108,7 +108,8 @@ def env_alias(name, env=None):
 
 
 def engine_env(overrides=None, *, base=None) -> dict:
-    """The environment plus FENNEC_* aliases mirrored onto the COLI_* names both read."""
+    """The environment with every FENNEC_* knob mirrored onto the COLI_* name
+    a Colibri checkout needs, unless that name is already set."""
     env = dict(os.environ if base is None else base)
     for name in ALIASES:
         value = env.get("FENNEC_" + name)
@@ -123,6 +124,16 @@ def strip_engine_vars(env) -> dict:
     """Drop every engine knob, both spellings, so a profile starts from a clean slate."""
     return {key: value for key, value in env.items()
             if not key.startswith("COLI_") and key not in FENNEC_VARS}
+
+
+def pin(env, name, value) -> None:
+    """Set one knob under both spellings, so Fennec and Colibri agree on it.
+
+    Writing only COLI_* would work, because that name is Fennec's alias, but a
+    stale FENNEC_* left in the environment would outrank it, which is exactly the
+    kind of silent disagreement a measurement run must not have.
+    """
+    env["FENNEC_" + name] = env["COLI_" + name] = str(value)
 
 
 def require_colibri(engine: Engine, capability) -> None:

@@ -38,7 +38,7 @@ from importlib import import_module
 from pathlib import Path
 
 from engine_paths import (EngineError, default_engine_root, engine_env, env_alias,
-                          resolve, serve_command)
+                          pin, resolve, serve_command, strip_engine_vars)
 
 PROMPTS = [
     "Reply with exactly the single word: pong",
@@ -206,16 +206,15 @@ def bench_engine(args):
     port = free_port(args.port)
     base_url = f"http://127.0.0.1:{port}"
     log_path = RESULTS / "engine_vs_airllm_engine.log"
-    # Neither spelling may leak a GPU request into the cpu/default arms.
-    dropped = {"COLI_CUDA", "COLI_METAL", "COLI_VK_DEV2",
-               "FENNEC_CUDA", "FENNEC_METAL", "FENNEC_VK_DEV2"}
+    # Neither spelling may leak a GPU request into the cpu/default arms, and
+    # FENNEC_* outranks its alias, so one stale name in the shell would win.
     env = engine_env({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-                     base={k: v for k, v in os.environ.items() if k not in dropped})
+                     base=strip_engine_vars(os.environ))
     if args.backend_engine == "vulkan":
-        env["COLI_VULKAN"] = "1"
+        pin(env, "VULKAN", "1")
     if args.engine_api_key:
         # Fennec reads the key from the environment; Colibri also takes --api-key.
-        env["COLI_API_KEY"] = args.engine_api_key
+        pin(env, "API_KEY", args.engine_api_key)
     command = serve_command(engine, Path(args.model).resolve(), port,
                             extra=["--policy", "quality", "--ctx", "4096",
                                    "--ngen", str(args.tokens + 16)],
