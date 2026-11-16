@@ -14,7 +14,7 @@ no new code shipped in them. Dates are the tag publish dates.
 ## [Unreleased] — 1.0.0 in preparation
 
 Nothing at 1.0.0 is published. The newest release here is `v0.9.0`
-(2026-11-11T19:29Z). Measured on the working tree: 102 tests passed plus 162
+(2026-11-11T19:29Z). Measured on the working tree: 105 tests passed plus 162
 subtests (`python -m pytest -q`, 2026-11-15).
 
 ### Added
@@ -23,6 +23,10 @@ subtests (`python -m pytest -q`, 2026-11-15).
 
 ### Changed
 - Both spellings are stripped from the parent config, so the child wins
+- The engine knobs are single-spelled: the harness pins `FENNEC_*` and emits the
+  `COLI_*` names only when the resolved child is the legacy `c/coli` launcher
+- The benchmark checkpoints moved to `D:/fennec-models` (was the MEGA-synced
+  `colibri-models` directory)
 
 ## [0.9.0] - 2026-11-11
 

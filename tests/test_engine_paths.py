@@ -167,22 +167,39 @@ class ServeArgvTests(OfflineTestCase):
 
 
 class EnvironmentTests(OfflineTestCase):
-    def test_fennec_spellings_mirror_onto_the_coli_names(self):
+    def test_a_colibri_child_is_served_the_names_its_launcher_reads(self):
         base = {"FENNEC_VULKAN": "1", "FENNEC_MODEL": "/models/m", "FENNEC_API_KEY": "local",
                 "FENNEC_VK_TIER_HOST_GB": "4", "FENNEC_CUDA": "0", "FENNEC_METAL": "0",
                 "PATH": "keep"}
-        env = paths.engine_env(base=base)
+        env = paths.engine_env(base=base, legacy=True)
         for name in ("VULKAN", "MODEL", "API_KEY", "VK_TIER_HOST_GB", "CUDA", "METAL"):
             self.assertEqual(env["COLI_" + name], base["FENNEC_" + name], name)
         self.assertEqual(env["PATH"], "keep")
 
+    def test_a_native_child_is_served_only_fennec_names(self):
+        env = paths.engine_env(base={"FENNEC_VULKAN": "1", "FENNEC_MODEL": "/models/m"})
+        self.assertEqual(env, {"FENNEC_VULKAN": "1", "FENNEC_MODEL": "/models/m"})
+
     def test_an_explicit_coli_value_is_not_overwritten(self):
-        env = paths.engine_env(base={"COLI_VK_TIER_HOST_GB": "13", "FENNEC_VK_TIER_HOST_GB": "4"})
+        env = paths.engine_env(base={"COLI_VK_TIER_HOST_GB": "13", "FENNEC_VK_TIER_HOST_GB": "4"},
+                               legacy=True)
         self.assertEqual(env["COLI_VK_TIER_HOST_GB"], "13")
 
     def test_overrides_win_and_are_stringified(self):
         env = paths.engine_env({"COLI_VULKAN": 1}, base={"FENNEC_VULKAN": "0"})
         self.assertEqual(env["COLI_VULKAN"], "1")
+
+    def test_a_pinned_override_is_mirrored_for_a_colibri_child(self):
+        env = paths.engine_env({"FENNEC_VULKAN": 1}, base={}, legacy=True)
+        self.assertEqual(env["COLI_VULKAN"], "1")
+
+    def test_pin_writes_the_legacy_name_only_for_a_colibri_child(self):
+        env = {}
+        paths.pin(env, "VULKAN", "1")
+        self.assertEqual(env, {"FENNEC_VULKAN": "1"})
+        env = {}
+        paths.pin(env, "VULKAN", "1", legacy=True)
+        self.assertEqual(env, {"FENNEC_VULKAN": "1", "COLI_VULKAN": "1"})
 
     def test_env_alias_reads_either_spelling(self):
         self.assertEqual(paths.env_alias("MODEL", {"COLI_MODEL": "old"}), "old")
@@ -317,8 +334,11 @@ class BenchCallSiteTests(OfflineTestCase):
         self.assertEqual(argv[argv.index("--host") + 1], "127.0.0.1")
         self.assertIn("--auto-tier", argv)
         self.assertEqual(argv.count("--auto-tier"), 1, "the helper owns --auto-tier")
-        self.assertEqual(call.kwargs["env"]["COLI_VK_TIER_HOST_GB"], "4")
-        self.assertEqual(call.kwargs["env"]["COLI_API_KEY"], "local")
+        env = call.kwargs["env"]
+        self.assertEqual(env["FENNEC_VK_TIER_HOST_GB"], "4")
+        self.assertEqual(env["FENNEC_API_KEY"], "local")
+        self.assertNotIn("COLI_VK_TIER_HOST_GB", env, "a native child reads one spelling")
+        self.assertNotIn("COLI_API_KEY", env)
         self.assertEqual(call.kwargs["cwd"], str(engine.root))
 
     def test_tier_profiles_keep_the_colibri_launcher(self):
@@ -331,8 +351,11 @@ class BenchCallSiteTests(OfflineTestCase):
         self.assertEqual(argv[:3], [sys.executable, str(engine.binary), "serve"])
         self.assertEqual(argv[argv.index("--api-key") + 1], "local")
         self.assertEqual(argv[argv.index("--ctx") + 1], "8192")
+        env = call.kwargs["env"]
+        self.assertEqual(env["COLI_VK_TIER_HOST_GB"], "4", "the launcher reads its own name")
+        self.assertEqual(env["FENNEC_VK_TIER_HOST_GB"], "4")
 
-    def test_tier_profiles_strip_inherited_knobs_of_both_spellings(self):
+    def test_tier_profiles_strip_every_spelling_and_pin_one_for_a_native_child(self):
         engine = paths.resolve(self.fennec_root())
         args = argparse.Namespace(model=str(self.model), ctx=8192, ngen=128, engine_root=str(engine.root))
         extra_env, extra_args = tiers.PROFILES[0][1], tiers.PROFILES[0][2]
@@ -341,14 +364,14 @@ class BenchCallSiteTests(OfflineTestCase):
             call = self.launch(lambda: tiers.run_profile("pool 4 GB, gpu auto", extra_env, extra_args, args, engine),
                                tiers)
         env = call.kwargs["env"]
-        # Every knob the profile pins arrives under both spellings, so neither
-        # name can carry an ambient value into the measured run.
-        self.assertEqual(env["COLI_VK_TIER_HOST_GB"], "4", "the profile must win over the ambient value")
-        self.assertEqual(env["FENNEC_VK_TIER_HOST_GB"], "4")
+        # The ambient shell may carry either spelling; both are stripped, and a
+        # native child is then pinned under Fennec's name only.
+        self.assertEqual(env["FENNEC_VK_TIER_HOST_GB"], "4", "the profile must win over the ambient value")
         self.assertEqual(env["FENNEC_VULKAN"], "1", "the profile's pin replaces the ambient one")
-        self.assertEqual(env["COLI_VULKAN"], "1")
         self.assertEqual(env["FENNEC_API_KEY"], "local")
-        self.assertEqual(env["COLI_API_KEY"], "local")
+        self.assertNotIn("COLI_VK_TIER_HOST_GB", env)
+        self.assertNotIn("COLI_VULKAN", env)
+        self.assertNotIn("COLI_API_KEY", env)
 
     def test_engine_vs_airllm_launches_fennec_directly(self):
         engine = paths.resolve(self.fennec_root())
@@ -360,8 +383,11 @@ class BenchCallSiteTests(OfflineTestCase):
         self.assertEqual(argv[:2], [str(engine.binary), "serve"])
         self.assertNotIn(sys.executable, argv)
         self.assertNotIn("--api-key", argv)
-        self.assertEqual(call.kwargs["env"]["COLI_API_KEY"], "local")
-        self.assertEqual(call.kwargs["env"]["COLI_VULKAN"], "1")
+        env = call.kwargs["env"]
+        self.assertEqual(env["FENNEC_API_KEY"], "local")
+        self.assertEqual(env["FENNEC_VULKAN"], "1")
+        self.assertNotIn("COLI_API_KEY", env, "a native child reads one spelling")
+        self.assertNotIn("COLI_VULKAN", env)
 
     def test_engine_vs_airllm_keeps_the_colibri_launcher(self):
         engine = paths.resolve(self.colibri_root())
@@ -372,6 +398,9 @@ class BenchCallSiteTests(OfflineTestCase):
         argv = call.args[0]
         self.assertEqual(argv[:3], ["interp", str(engine.binary), "serve"])
         self.assertEqual(argv[argv.index("--api-key") + 1], "local")
+        env = call.kwargs["env"]
+        self.assertEqual(env["COLI_VULKAN"], "1", "the launcher reads the name it was written against")
+        self.assertEqual(env["COLI_API_KEY"], "local")
 
     def test_engine_vs_airllm_reports_a_missing_engine_without_spawning(self):
         empty = self.work / "empty"

@@ -19,11 +19,12 @@ from typing import NamedTuple
 FENNEC = "fennec"
 COLIBRI = "colibri"
 
-# Engine knobs the two engines share. FENNEC_* is the spelling and wins when both
-# are set; COLI_* is the alias, and the only name a Colibri checkout reads.
-ALIASES = ("MODEL", "API_KEY", "VULKAN", "METAL", "CUDA",
-           "VK_TIER_HOST_GB", "VK_TIER_GB", "VK_DEV2")
-FENNEC_VARS = frozenset("FENNEC_" + name for name in ALIASES)
+# The engine knobs these harnesses place. The native binary reads `FENNEC_<NAME>`
+# and nothing else; `COLI_<NAME>` is the name the legacy `c/coli` launcher was
+# written against, so it is only ever emitted for that child.
+KNOBS = ("MODEL", "API_KEY", "VULKAN", "METAL", "CUDA",
+         "VK_TIER_HOST_GB", "VK_TIER_GB", "VK_DEV2")
+FENNEC_VARS = frozenset("FENNEC_" + name for name in KNOBS)
 
 DEFAULT_PORT = 8184
 
@@ -91,8 +92,8 @@ def serve_command(engine: Engine, model, port, *, host="127.0.0.1", extra=(),
                   api_key=None, python=None) -> list:
     """`serve --auto-tier --model <dir> --host <host> --port <n>` for either engine.
 
-    Fennec reads the key from COLI_API_KEY/FENNEC_API_KEY (see engine_env); the
-    Colibri launcher also accepts --api-key, which is kept for compatibility.
+    Fennec takes the key from `FENNEC_API_KEY`, which the caller pins; the Colibri
+    launcher is passed --api-key as well, the spelling it was written against.
     """
     args = ["serve", "--auto-tier", "--model", str(model), "--host", host, "--port", str(port)]
     args += [str(arg) for arg in extra]
@@ -102,38 +103,45 @@ def serve_command(engine: Engine, model, port, *, host="127.0.0.1", extra=(),
 
 
 def env_alias(name, env=None):
-    """FENNEC_<name> or COLI_<name>, whichever is set (Fennec spelling first)."""
+    """The value an operator exported for one knob: `FENNEC_<name>`, else the
+    `COLI_<name>` name a Colibri checkout is usually run with."""
     env = os.environ if env is None else env
     return env.get("FENNEC_" + name) or env.get("COLI_" + name)
 
 
-def engine_env(overrides=None, *, base=None) -> dict:
-    """The environment with every FENNEC_* knob mirrored onto the COLI_* name
-    a Colibri checkout needs, unless that name is already set."""
+def engine_env(overrides=None, *, base=None, legacy=False) -> dict:
+    """The child environment: overrides applied, then - only for a `c/coli` child
+    - every `FENNEC_*` knob mirrored onto the `COLI_*` name that launcher reads."""
     env = dict(os.environ if base is None else base)
-    for name in ALIASES:
-        value = env.get("FENNEC_" + name)
-        if value and not env.get("COLI_" + name):
-            env["COLI_" + name] = value
     if overrides:
         env.update({key: str(value) for key, value in overrides.items()})
+    if legacy:
+        for name in KNOBS:
+            value = env.get("FENNEC_" + name)
+            if value and not env.get("COLI_" + name):
+                env["COLI_" + name] = value
     return env
 
 
 def strip_engine_vars(env) -> dict:
-    """Drop every engine knob, both spellings, so a profile starts from a clean slate."""
+    """Drop every engine knob under either spelling, so a profile starts clean.
+
+    The legacy name is scrubbed even for a native child: a stale `COLI_VULKAN` in
+    the shell must not be able to change what a measurement run places.
+    """
     return {key: value for key, value in env.items()
             if not key.startswith("COLI_") and key not in FENNEC_VARS}
 
 
-def pin(env, name, value) -> None:
-    """Set one knob under both spellings, so Fennec and Colibri agree on it.
+def pin(env, name, value, *, legacy=False) -> None:
+    """Set one knob under the names this child reads.
 
-    Writing only COLI_* would work, because that name is Fennec's alias, but a
-    stale FENNEC_* left in the environment would outrank it, which is exactly the
-    kind of silent disagreement a measurement run must not have.
+    A native child gets `FENNEC_<NAME>` alone. A `c/coli` child gets both, because
+    the launcher reads `COLI_<NAME>` while anything it re-execs may read Fennec's.
     """
-    env["FENNEC_" + name] = env["COLI_" + name] = str(value)
+    env["FENNEC_" + name] = str(value)
+    if legacy:
+        env["COLI_" + name] = str(value)
 
 
 def require_colibri(engine: Engine, capability) -> None:

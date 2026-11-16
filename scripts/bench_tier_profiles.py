@@ -8,9 +8,9 @@ engine is spawned and stopped by this script; nothing else is touched.
     python bench_tier_profiles.py --pairs 1
 
 Profiles are the knobs `fennec serve` exposes for placement: the resource policy,
-the VRAM budget, the host-RAM expert pool (FENNEC_VK_TIER_HOST_GB, alias
-COLI_VK_TIER_HOST_GB) and the CPU thread count. NPU is absent on purpose:
-`--xdna` is AMD-only and the Intel NPU has no path into the engine.
+the VRAM budget, the host-RAM expert pool (`FENNEC_VK_TIER_HOST_GB`) and the CPU
+thread count. NPU is absent on purpose: `--xdna` is AMD-only and the Intel NPU
+has no path into the engine.
 
 The engine is resolved by engine_paths: Fennec's native binary self-launches,
 and a Colibri checkout (`python c/coli serve`) is the fallback. `--auto-tier` is
@@ -30,20 +30,20 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from engine_paths import (EngineError, default_engine_root, env_alias, pin, resolve,
-                          serve_command, strip_engine_vars)
+from engine_paths import (EngineError, default_engine_root, engine_env, env_alias,
+                          resolve, serve_command, strip_engine_vars)
 
 RESULTS = Path(__file__).resolve().parents[1] / "results"
 PROMPT = "Write the numbers from 1 to 50 separated by commas, nothing else."
 
 PROFILES = [
-    ("pool 4 GB, gpu auto", {"COLI_VULKAN": "1", "COLI_VK_TIER_HOST_GB": "4"},
+    ("pool 4 GB, gpu auto", {"FENNEC_VULKAN": "1", "FENNEC_VK_TIER_HOST_GB": "4"},
      ["--policy", "quality"]),
-    ("pool 4 GB + gpu 4 GB", {"COLI_VULKAN": "1", "COLI_VK_TIER_HOST_GB": "4",
-                              "COLI_VK_TIER_GB": "4"},
+    ("pool 4 GB + gpu 4 GB", {"FENNEC_VULKAN": "1", "FENNEC_VK_TIER_HOST_GB": "4",
+                              "FENNEC_VK_TIER_GB": "4"},
      ["--policy", "quality"]),
-    ("pool 6 GB + gpu 4 GB", {"COLI_VULKAN": "1", "COLI_VK_TIER_HOST_GB": "6",
-                              "COLI_VK_TIER_GB": "4"},
+    ("pool 6 GB + gpu 4 GB", {"FENNEC_VULKAN": "1", "FENNEC_VK_TIER_HOST_GB": "6",
+                              "FENNEC_VK_TIER_GB": "4"},
      ["--policy", "quality"]),
 ]
 
@@ -131,12 +131,10 @@ def run_profile(name, extra_env, extra_args, args, engine):
     port = free_port()
     base = f"http://127.0.0.1:{port}"
     log = RESULTS / f"tier-{name.replace(' ', '-').replace('+', '')}.log"
-    env = strip_engine_vars(os.environ)
-    # The profiles are written in the COLI_* names they were measured under;
-    # pin sets each knob under both spellings so Fennec reads its own name too.
-    for key, value in extra_env.items():
-        pin(env, key.removeprefix("COLI_"), value)
-    pin(env, "API_KEY", "local")
+    # The profiles name each knob in Fennec's spelling. A c/coli child is served
+    # the same values under the COLI_* names its launcher reads.
+    env = engine_env({**extra_env, "FENNEC_API_KEY": "local"},
+                     base=strip_engine_vars(os.environ), legacy=not engine.is_fennec)
     env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     command = serve_command(engine, args.model, port,
                             extra=["--ctx", str(args.ctx), "--ngen", str(args.ngen), *extra_args],

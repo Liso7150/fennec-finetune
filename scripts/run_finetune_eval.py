@@ -243,9 +243,11 @@ def evaluate_model(plan, model, label):
     port = plan["port"]
     require_free_port(port)
     model_id = plan["run_id"] + "-" + label
-    env = engine_env({"COLI_VULKAN": "1", "COLI_ENGINE": str(plan["binary"]),
-                      "PYTHONDONTWRITEBYTECODE": "1"})
-    # Preflight refuses Fennec here, so this is always the Colibri launcher argv.
+    # Preflight refuses Fennec here, so the child is always the Colibri launcher:
+    # Fennec-spelled knobs are mirrored onto the names it reads, and COLI_ENGINE is
+    # its own pointer to the container binary.
+    env = engine_env({"FENNEC_VULKAN": "1", "COLI_ENGINE": str(plan["binary"]),
+                      "PYTHONDONTWRITEBYTECODE": "1"}, legacy=True)
     engine = Engine(plan["engine_kind"], Path(plan["launcher"]), Path(plan["engine_root"]))
     argv = command(engine, ["serve", "--model", str(model),
                             "--auto-tier", "--policy", "quality", "--ctx", "8192", "--ngen", "700",

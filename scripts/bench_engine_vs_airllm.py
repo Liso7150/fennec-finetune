@@ -206,15 +206,16 @@ def bench_engine(args):
     port = free_port(args.port)
     base_url = f"http://127.0.0.1:{port}"
     log_path = RESULTS / "engine_vs_airllm_engine.log"
-    # Neither spelling may leak a GPU request into the cpu/default arms, and
-    # FENNEC_* outranks its alias, so one stale name in the shell would win.
+    # Every knob starts from a stripped environment: one stale GPU request in the
+    # shell must not decide what the cpu and default arms measure.
+    legacy = not engine.is_fennec
     env = engine_env({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-                     base=strip_engine_vars(os.environ))
+                     base=strip_engine_vars(os.environ), legacy=legacy)
     if args.backend_engine == "vulkan":
-        pin(env, "VULKAN", "1")
+        pin(env, "VULKAN", "1", legacy=legacy)
     if args.engine_api_key:
-        # Fennec reads the key from the environment; Colibri also takes --api-key.
-        pin(env, "API_KEY", args.engine_api_key)
+        # Both engines take the key from the environment; the launcher also takes --api-key.
+        pin(env, "API_KEY", args.engine_api_key, legacy=legacy)
     command = serve_command(engine, Path(args.model).resolve(), port,
                             extra=["--policy", "quality", "--ctx", "4096",
                                    "--ngen", str(args.tokens + 16)],
@@ -428,7 +429,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", choices=("engine", "airllm", "both"), default="both")
     ap.add_argument("--backend-engine", choices=("vulkan", "cpu", "default"), default="vulkan",
-                    help="COLI_VULKAN=1 / FENNEC_VULKAN=1 (the shipped GPU path), CPU only, or engine default")
+                    help="FENNEC_VULKAN=1 (the shipped GPU path), CPU only, or engine default")
     ap.add_argument("--tokens", type=int, default=32)
     ap.add_argument("--prompts", type=int, default=len(PROMPTS),
                     help=f"how many of the {len(PROMPTS)} fixed prompts to run")

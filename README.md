@@ -72,9 +72,10 @@ cd ~/Fennec && cargo build --release
 ```
 
 `--engine-root` (or `FENNEC_ENGINE_ROOT` / `FENNEC_HOME`) selects the checkout; the default prefers
-`~/Fennec` over `~/Colibri`. Both engines speak the same OpenAI-compatible HTTP contract on port 8184
-and read the same knobs: `FENNEC_*` aliases `COLI_*` (`FENNEC_MODEL`/`COLI_MODEL`,
-`FENNEC_API_KEY`/`COLI_API_KEY`, `FENNEC_VULKAN`/`COLI_VULKAN`, `COLI_METAL`, `COLI_CUDA`, `COLI_VK_TIER_HOST_GB`); an explicit `COLI_*` value wins.
+`~/Fennec` over `~/Colibri`. Both engines speak the same OpenAI-compatible HTTP contract on port 8184.
+The native binary reads one spelling of each knob, `FENNEC_*` (`FENNEC_MODEL`, `FENNEC_API_KEY`,
+`FENNEC_VULKAN`, `FENNEC_METAL`, `FENNEC_CUDA`, `FENNEC_VK_TIER_HOST_GB`); a `c/coli` child is handed
+the same values under the `COLI_*` names its launcher was written against.
 
 | Script | Fennec | Colibri fallback |
 |---|---|---|
