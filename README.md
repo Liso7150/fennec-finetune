@@ -8,16 +8,18 @@ forward+backward through 40 MoE layers peaks at **~1.9 GB VRAM**.
 
 ## Memory budget
 
-Measured with `fennec preflight` on the production model: **22.78 GiB weights** and
-**0.62 GiB of KV cache at 8,192 tokens** (81,920 bytes per token), for a 23.40 GiB
-peak against 8.00 GiB VRAM + host RAM — weights tier to the host pool, KV stays in
-memory. The preflight reads `config.json` only; it loads nothing.
+Measured during the 2026-11 audit with the since-retired preflight tooling:
+**22.78 GiB weights** and **0.62 GiB of KV cache at 8,192 tokens** (81,920 bytes
+per token), for a 23.40 GiB peak against 8.00 GiB VRAM + host RAM — weights tier
+to the host pool, KV stays in memory. That tool no longer ships; treat the
+figures as historical. The Fennec engine prints its own tiering decisions when
+`serve` starts a model.
 
 ## Features
 
 - Streamed LoRA training through AirLLM on an 8 GB GPU (~2 GB peak VRAM).
 - Execution-verified SFT data generation: reference solutions are actually run against tests.
-- Shard-wise LoRA merge, int4 conversion and before/after evaluation.
+- Shard-wise LoRA merge, FQ4 sidecar quantization via the Fennec engine, and before/after evaluation.
 - Frozen 60-case holdout with a per-case zero-regression promotion policy.
 - Reproducible evidence: verdict JSON, run logs and comparison graphs in `results/`.
 
@@ -34,13 +36,18 @@ memory. The preflight reads `config.json` only; it loads nothing.
 4. **Merge** — `scripts/merge_lora_qwen36.py` applies `W += (alpha/r)·(B@A)`
    shard-by-shard into a copy of the bf16 base.
 5. **Convert + verify** — `scripts/run_finetune_eval.py` chains merge → convert
-   (`--ebits 4 --gs 64`) → candidate serve → execution-verified before/after
-   benchmarks (hard + base suites, greedy, no-think) → comparison graph →
-   `results/finetune_verdict.json`. The original container is never modified;
-   promote the candidate only with zero regressions. Requires the engine
-   checkout (`~/Colibri`) for `bench_best_model.py` and `c/tools/convert_qwen36.py`.
-6. **Graph** — `scripts/make_finetune_graph.py` renders passes + training loss
-   into `results/bench_finetune_comparison.png` and prints the winner.
+   (`fennec quant --layers all` writes an FQ4 sidecar) → evaluate → graph. The
+   evaluate stage serves the baseline and the LoRA-merged candidate in turn on an
+   owned port with the **Fennec engine**, runs the frozen 60-case holdout against
+   each, and writes `results/finetune_verdict.json` from the suite's own
+   `compare_reports` (quality-first: at least one gain and zero regressions; ties
+   keep the incumbent). Retention-only scope: the verdict never promotes anything,
+   and the original container is never modified. Requires the Fennec engine
+   checkout (`~/Fennec` or `FENNEC_ENGINE_ROOT`) with a `--release` build.
+6. **Graph** — `scripts/make_finetune_graph.py` reads `finetune_verdict.json`
+   plus the training loss log and renders
+   `results/bench_finetune_comparison.png`; the title states the retention
+   verdict (regression, tie, or gains-only) and never claims promotion.
 
 ### Frozen holdout (60 cases)
 
@@ -78,23 +85,26 @@ python scripts/make_sft_data.py
 python scripts/airllm_train_qwen36.py --smoke          # feasibility gate
 python scripts/airllm_train_qwen36.py --epochs 2 --lr 5e-5 --rank 16
 python scripts/merge_lora_qwen36.py --adapter ~/fennec-models/qwen36-lora-adapter.pt
-python scripts/run_finetune_eval.py    # merge+convert+bench+graph in one chain
+python scripts/run_finetune_eval.py --stages merge convert evaluate graph
 ```
+
+Stages are explicit opt-in (default `--stages evaluate`, which needs an already
+merged `--merged` directory); each stage refuses to reuse an existing output.
 
 ## Credits
 
 - **[AirLLM](https://github.com/lyogavin/airllm)** — layer-streamed inference and
   the streamed LoRA trainer this pipeline uses.
-- **[JustVugg/colibri](https://github.com/JustVugg/colibri)** — the base idea of the
-  inference engine that serves the converted container.
 
 Part of the [Fennec suite](https://github.com/Liso7150/fennec-environment-setup).
 
-## Engine vs AirLLM inference benchmark
+## Engine vs AirLLM inference benchmark (historical)
 
-`scripts/bench_engine_vs_airllm.py` compares the Colibri engine with AirLLM-only
-inference on the same machine and prompts, and writes
-`results/engine_vs_airllm.{json,md}`.
+`scripts/bench_engine_vs_airllm.py` compares an engine-backed inference path
+with AirLLM-only inference on the same machine and prompts, and writes
+`results/engine_vs_airllm.{json,md}`. The measurement below was recorded on
+2026-11-11 against the then-serving Colibri engine; the suite now serves with
+the Fennec engine, so the table stands as history, not as the current path.
 
 ```bash
 python scripts/bench_engine_vs_airllm.py --backend both --tokens 32 --airllm-tokens 4
@@ -116,15 +126,18 @@ both phases driven by the same `python` on PATH:
 | Colibri engine (Vulkan) | 38.1 | 0.485 | **10.68** | 15.42 | 6.27 |
 | AirLLM 4.0.0 only (CPU) | 2.4 | n/a | **0.077** | 1.37 | 0.36 |
 
-**Verdict: the Colibri engine stays the inference path — 139x faster decode.**
-AirLLM's one advantage is footprint: 1.37 GiB RAM against 15.42 GiB, because it
+**Verdict: an engine-backed path is the inference path — 139x faster decode
+than AirLLM alone.** AirLLM's one advantage is footprint: 1.37 GiB RAM against 15.42 GiB, because it
 holds a single layer at a time. That buys the memory with roughly 13 s per token,
 which is acceptable for offline fine-tuning and unusable for chat. Decode rates
 are compared like with like: the engine's excludes time-to-first-token, and
 AirLLM's subtracts its timed 1-token warm-up to remove prefill. Full numbers and
 per-prompt output: [`results/engine_vs_airllm.md`](results/engine_vs_airllm.md).
 
-## Context-payload benchmark (old loop vs 1.4.1 compaction)
+## Context-payload benchmark (old loop vs 1.4.1 compaction) — historical
+
+Measured 2026-11-10 before the 1.0.0 engine switch; `fennec_core.context.compact()`
+itself is current and still ships in fennec-core.
 
 `scripts/bench_context_payload.py` replays one fixed agent transcript through an
 already-running engine twice: the pre-1.4.1 payload (each tool result sliced to

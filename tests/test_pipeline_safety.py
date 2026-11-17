@@ -21,6 +21,7 @@ TESTS = Path(__file__).resolve().parent
 SCRIPTS = TESTS.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import airllm_train_qwen36 as train
+import bench_holdout as bench
 import make_finetune_graph as graph
 import merge_lora_qwen36 as merger
 import run_finetune_eval as evaluation
@@ -210,20 +211,19 @@ class PreflightTests(Fixtures):
         self.engine = self.work / "engine"
         self.models = self.work / "models"
         self.results = self.work / "results"
-        for path in (self.engine / "c/tools", self.engine / "scripts", self.models):
-            path.mkdir(parents=True)
-        for path in (self.engine / "c/coli", self.engine / "c/tools/convert_qwen36.py",
-                     self.engine / "c" / ("qwen36.exe" if os.name == "nt" else "qwen36")):
-            path.write_text("synthetic", encoding="utf-8")
-        self.bench = self.engine / "scripts/bench_best_model.py"
-        self.bench.write_text('RESULTS = "must-not-use-engine-results"\n', encoding="utf-8")
-        for name, converted in (("Qwen3.6-35B-A3B-bf16", False), ("qwen36-35b", True),
-                                ("qwen36-35b-lora", True)):
+        self.binary = self.engine / "target" / "release" / ("fennec.exe" if os.name == "nt" else "fennec")
+        self.binary.parent.mkdir(parents=True)
+        self.binary.write_text("synthetic", encoding="utf-8")
+        for name, files in (("Qwen3.6-35B-A3B-bf16",
+                             ("config.json", "tokenizer.json", "model.safetensors.index.json")),
+                            ("qwen36-35b",
+                             ("config.json", "tokenizer.json", "model-00000.safetensors")),
+                            ("Qwen3.6-35B-A3B-bf16-lora",
+                             ("config.json", "tokenizer.json", "model.safetensors.index.json"))):
             directory = self.models / name
-            directory.mkdir()
-            for file in ("config.json", "tokenizer.json", "qwen36_meta.json" if converted
-                         else "model.safetensors.index.json"):
-                self.json_file(directory / file, {})
+            directory.mkdir(parents=True)
+            for file in files:
+                (directory / file).write_text("{}", encoding="utf-8")
         (self.models / "qwen36-lora-adapter.pt").write_bytes(b"synthetic-not-loaded")
         with socket.socket() as port:
             port.bind(("127.0.0.1", 0))
@@ -236,13 +236,16 @@ class PreflightTests(Fixtures):
         first, second = evaluation.preflight(args), evaluation.preflight(args)
         self.assertNotEqual(first["run_dir"], second["run_dir"])
         self.assertEqual(first["merge_script"], SCRIPTS / "merge_lora_qwen36.py")
-        self.assertEqual(first["bench_script"], self.bench)
+        self.assertEqual(first["binary"], self.binary)
+        self.assertEqual(first["holdout_script"], SCRIPTS / "bench_holdout.py")
         self.assertEqual(first["engine_python"], Path(sys.executable).resolve())
         self.assertFalse(self.results.exists())
 
     def test_env_root_and_explicit_engine_runtime(self):
+        argv = self.argv[2:] + ["--engine-python", sys.executable, "--stages", "convert",
+                                "--merged", str(self.models / "Qwen3.6-35B-A3B-bf16")]
         with mock.patch.dict(os.environ, {"FENNEC_ENGINE_ROOT": str(self.engine)}):
-            args = evaluation.parse_args(self.argv[2:] + ["--engine-python", sys.executable])
+            args = evaluation.parse_args(argv)
         self.assertEqual(evaluation.preflight(args)["engine_root"], self.engine)
 
     def test_preflight_subprocess_no_torch_or_model_imports(self):
@@ -273,53 +276,118 @@ class PreflightTests(Fixtures):
         self.assertFalse(self.results.exists())
 
     def test_explicit_stages_do_not_reuse_existing_output(self):
-        args = evaluation.parse_args(self.argv + ["--stages", "convert", "--candidate",
-                                                  str(self.models / "qwen36-35b-lora")])
+        existing = self.models / "Qwen3.6-35B-A3B-bf16-lora"
+        existing.mkdir(exist_ok=True)
+        (existing / "keep.txt").write_text("unchanged", encoding="utf-8")
+        args = evaluation.parse_args(self.argv + ["--stages", "merge", "--merged", str(existing)])
         with self.assertRaisesRegex(ValueError, "existing output"):
             evaluation.preflight(args)
+        self.assertEqual((existing / "keep.txt").read_text(), "unchanged")
 
     def test_legacy_adapter_preflight_requires_scaling(self):
         with self.assertRaisesRegex(ValueError, "explicit --scaling"):
             evaluation.preflight(evaluation.parse_args(self.argv + ["--stages", "merge"]))
 
-    def test_benchmark_redirect_without_engine_write(self):
-        self.bench.write_text('import os\nRESULTS = "bad"\nos.makedirs(RESULTS, exist_ok=True)\n'
-                              'with open(os.path.join(RESULTS, "bench.json"), "w") as f:\n'
-                              '    f.write("synthetic")\n', encoding="utf-8")
-        exec(evaluation.bench_code(self.bench, self.results), {"__name__": "__main__"})
-        self.assertTrue((self.results / "bench.json").is_file())
-        self.assertFalse((self.engine / "results").exists())
+    def test_fennec_command_shapes_are_pinned(self):
+        plan = evaluation.preflight(evaluation.parse_args(
+            self.argv + ["--stages", "convert", "evaluate",
+                         "--merged", str(self.models / "Qwen3.6-35B-A3B-bf16")]))
+        merged, baseline = plan["merged"], plan["baseline"]
+        self.assertEqual(merged, self.models / "Qwen3.6-35B-A3B-bf16")
+        self.assertEqual(baseline, self.models / "qwen36-35b")
+        self.assertEqual(plan["sidecar"], plan["run_dir"] / "finetune.fq4")
+        serve = [str(self.binary), "serve", "--model", str(baseline), "--auto-tier",
+                 "--ctx", "8192", "--ngen", "700", "--host", "127.0.0.1",
+                 "--port", str(self.port), "--api-key", "local"]
+        self.assertEqual(evaluation.serve_command(plan, baseline, "qwen36"), serve)
+        self.assertEqual(evaluation.serve_command(plan, merged, "finetune"),
+                         serve[:2] + ["--model", str(merged)] + serve[4:] + ["--fq4", str(plan["sidecar"])])
+        self.assertEqual(evaluation.quant_command(plan),
+                         [str(self.binary), "quant", "--model", str(merged), "--layers", "all",
+                          "--out", str(plan["sidecar"])])
+        self.assertEqual(evaluation.holdout_command(plan, "qwen36-35b", "qwen36"),
+                         [sys.executable, "-B", str(SCRIPTS / "bench_holdout.py"),
+                          "--base", f"http://127.0.0.1:{self.port}/v1", "--model", "qwen36-35b",
+                          "--api-key-env", "FENNEC_API_KEY",
+                          "--out", str(plan["run_dir"] / "holdout_qwen36.json"),
+                          "--max-tokens", "700"])
+
+    def test_baseline_and_candidate_must_differ(self):
+        args = evaluation.parse_args(self.argv + ["--stages", "evaluate",
+                                                  "--merged", str(self.models / "qwen36-35b")])
+        with self.assertRaisesRegex(ValueError, "must be different"):
+            evaluation.preflight(args)
 
 
-class VerdictTests(unittest.TestCase):
-    @staticmethod
-    def result(rows):
-        return {"summary": {"passed": sum(rows.values()), "total": len(rows)},
-                "rows": [{"id": k, "passed": v} for k, v in rows.items()]}
+class VerdictTests(Fixtures):
+    def comparable(self, requested, passes):
+        """A full-faithful holdout report; passes(case) decides each verdict."""
+        manifest = bench.build_manifest()
+        tokens = {"prompt_tokens": 16, "completion_tokens": 8, "total_tokens": 24}
+        results = []
+        for case in manifest["cases"]:
+            passed = passes(case)
+            raw = json.dumps(case["expected"]) if passed else "999999"
+            parsed = case["expected"] if passed else 999999
+            results.append({"id": case["id"], "family": case["family"], "raw_answer": raw,
+                            "parsed_answer": parsed, "status": "ok", "passed": passed,
+                            "request_failure": False, "finish_reason": "stop",
+                            "wall_seconds": 0.05, "tokens": tokens})
+        return {"report_version": bench.REPORT_VERSION, "mode": "benchmark",
+                "run_status": "complete", "manifest": manifest,
+                "suite_sha256": manifest["cases_sha256"],
+                "settings": bench.generation_settings(700, 120.0),
+                "selection": {"kind": "full", "limit": None,
+                              "case_ids": [case["id"] for case in manifest["cases"]]},
+                "engine": {"endpoint": "http://127.0.0.1:8185/v1", "requested_model": requested,
+                           "model_path": None, "launch_settings": "not independently attested"},
+                "model_validation": {"status": "ok", "request_failure": False,
+                                     "requested_model": requested, "metadata": {"id": requested}},
+                "warmup": {"id": "warmup", "family": "warmup", "raw_answer": "null",
+                           "parsed_answer": None, "status": "ok", "passed": True,
+                           "request_failure": False, "finish_reason": "stop",
+                           "wall_seconds": 0.02, "tokens": dict(tokens, completion_tokens=1, total_tokens=17)},
+                "results": results}
 
-    def test_tie_not_improvement_and_hidden_regression_captured(self):
-        baseline = {s: self.result({"a": True, "b": False}) for s in ("hard", "base")}
-        candidate = {s: self.result({"a": False, "b": True}) for s in ("hard", "base")}
-        verdict = evaluation.compare_results(baseline, candidate)
-        self.assertTrue(verdict["regression"])
-        self.assertEqual(verdict["suites"]["base"]["per_task_regressions"], ["a"])
-        self.assertFalse(verdict["promotion_eligible"])
-        self.assertFalse(verdict["proven_improvement"])
-        self.assertIn("Tie: no proven improvement", verdict["note"])
+    def save_pair(self, original_passes, candidate_passes):
+        original = self.comparable("qwen36-35b", original_passes)
+        candidate = self.comparable("Qwen3.6-35B-A3B-bf16-lora", candidate_passes)
+        (self.work / "holdout_qwen36.json").write_text(json.dumps(original), encoding="utf-8")
+        (self.work / "holdout_finetune.json").write_text(json.dumps(candidate), encoding="utf-8")
+        return original, candidate
 
-    def test_retention_gain_never_promotes(self):
-        baseline = {s: self.result({"a": False}) for s in ("hard", "base")}
-        candidate = {s: self.result({"a": True}) for s in ("hard", "base")}
-        verdict = evaluation.compare_results(baseline, candidate)
-        self.assertFalse(verdict["promotion_eligible"])
-        self.assertEqual(verdict["recommendation"], "keep original; no change")
+    def test_verdict_reads_the_two_reports_and_keeps_original_on_regression(self):
+        self.save_pair(lambda case: True, lambda case: False)
+        verdict = evaluation.verdict({"run_dir": self.work})
+        self.assertEqual(verdict["recommendation"], "keep_original")
+        self.assertEqual(len(verdict["regressions"]), 60)
+        self.assertIn("keep original", graph.retention_title(verdict)[0])
+
+    def test_gain_without_regression_is_reported_but_never_promotes(self):
+        first = bench.build_manifest()["cases"][0]["id"]
+        self.save_pair(lambda case: case["id"] != first, lambda case: True)
+        verdict = evaluation.verdict({"run_dir": self.work})
+        self.assertEqual(verdict["recommendation"], "choose_candidate")
+        self.assertEqual(len(verdict["gains"]), 1)
+        self.assertEqual(verdict["regressions"], [])
         self.assertIn("no promotion", graph.retention_title(verdict)[0])
 
-    def test_missing_task_coverage_and_tie_title(self):
-        result = {s: {"summary": {"passed": 1, "total": 1}} for s in ("hard", "base")}
-        verdict = evaluation.compare_results(result, result)
-        self.assertFalse(verdict["suites"]["hard"]["task_comparison_complete"])
+    def test_tie_titles_as_no_proven_improvement(self):
+        self.save_pair(lambda case: True, lambda case: True)
+        verdict = evaluation.verdict({"run_dir": self.work})
+        self.assertEqual(verdict["recommendation"], "keep_original")
+        self.assertEqual(verdict["gains"], [])
         self.assertIn("no proven improvement; no change", graph.retention_title(verdict)[0])
+
+    def test_graph_renders_from_the_verdict_without_overwriting(self):
+        self.save_pair(lambda case: True, lambda case: True)
+        payload = evaluation.verdict({"run_dir": self.work})
+        (self.work / "finetune_verdict.json").write_text(json.dumps(payload), encoding="utf-8")
+        graph.main(["--results-dir", str(self.work)])
+        photo = self.work / "bench_finetune_comparison.png"
+        self.assertTrue(photo.is_file() and photo.read_bytes()[:4] == b"\x89PNG")
+        with self.assertRaisesRegex(ValueError, "overwrite"):
+            graph.main(["--results-dir", str(self.work)])
 
 
 class TrainingTests(Fixtures):

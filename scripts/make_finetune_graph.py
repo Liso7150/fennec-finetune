@@ -1,4 +1,4 @@
-"""Plot explicit hard/base retention results, never overwrite a historical graph."""
+"""Plot the frozen holdout retention verdict, never overwrite a historical graph."""
 from __future__ import annotations
 
 import argparse
@@ -16,10 +16,6 @@ GREEN = "#5EC98F"
 RED = "#EF615C"
 
 
-def load(results, name):
-    return json.loads((results / name).read_text(encoding="utf-8"))
-
-
 def loss_curve(results):
     steps, losses, avg = [], [], []
     path = results / "airllm_train.log"
@@ -34,28 +30,25 @@ def loss_curve(results):
 
 
 def retention_title(verdict):
-    if verdict["regression"]:
+    if verdict["regressions"]:
         return "RETENTION REGRESSION - keep original", RED
-    if verdict["score_delta"] == 0:
+    if verdict["recommendation"] == "keep_original":
         return "TIE - no proven improvement; no change", ACCENT
     return "RETENTION SCORE INCREASE ONLY - no promotion; keep original", GREEN
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--results-dir", required=True, help="directory containing the four benchmark JSON files")
+    ap.add_argument("--results-dir", required=True,
+                    help="run directory holding holdout_{qwen36,finetune}.json and finetune_verdict.json")
     args = ap.parse_args(argv)
     results = Path(args.results_dir).resolve()
     out = results / "bench_finetune_comparison.png"
     if out.exists():
         raise ValueError(f"refusing to overwrite existing graph: {out}")
-    baseline = {s: load(results, f"bench_best_qwen36_{s}.json") for s in ("hard", "base")}
-    candidate = {s: load(results, f"bench_best_finetune_{s}.json") for s in ("hard", "base")}
-    from run_finetune_eval import compare_results
-    verdict = compare_results(baseline, candidate)
+    verdict = json.loads((results / "finetune_verdict.json").read_text(encoding="utf-8"))
+    o, c = verdict["original"]["aggregate"], verdict["candidate"]["aggregate"]
     title, color = retention_title(verdict)
-    bs, bs2 = (baseline[s]["summary"] for s in ("hard", "base"))
-    cs, cs2 = (candidate[s]["summary"] for s in ("hard", "base"))
 
     import matplotlib
     matplotlib.use("Agg")
@@ -70,29 +63,46 @@ def main(argv=None):
     fig = plt.figure(figsize=(13.5, 7.6))
     gs = fig.add_gridspec(2, 2, hspace=0.42, wspace=0.22,
                           left=0.06, right=0.97, top=0.88, bottom=0.09)
-    fig.suptitle("Qwen3.6-35B-A3B: AirLLM LoRA retention comparison",
+    fig.suptitle("Qwen3.6-35B-A3B: AirLLM LoRA holdout retention",
                  fontsize=13.5, color=TEXT, y=0.97)
     fig.text(0.5, 0.925, title, ha="center", fontsize=12.5, color=color, weight="bold")
+
     ax = fig.add_subplot(gs[0, 0])
     x, width = range(2), 0.36
-    bars = [ax.bar([i - width / 2 for i in x], [bs["passed"], bs2["passed"]], width,
+    bars = [ax.bar([i - width / 2 for i in x], [o["passed"], o["accuracy"] * 100], width,
                    color=MUTED, label="original"),
-            ax.bar([i + width / 2 for i in x], [cs["passed"], cs2["passed"]], width,
+            ax.bar([i + width / 2 for i in x], [c["passed"], c["accuracy"] * 100], width,
                    color=ACCENT, label="fine-tuned candidate")]
-    for group in bars:
+    for group, fmt in zip(bars, ("{:.0f}", "{:.1f}%")):
         for bar in group:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.15,
-                    str(int(bar.get_height())), ha="center", fontsize=10)
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.02,
+                    fmt.format(bar.get_height()), ha="center", va="bottom", fontsize=10)
     ax.set_xticks(list(x))
-    ax.set_xticklabels([f"hard ({bs['total']}/{cs['total']} tasks)",
-                        f"base ({bs2['total']}/{cs2['total']} tasks)"])
-    ax.set_ylim(0, max(s["total"] for s in (bs, bs2, cs, cs2)) + 1.5)
-    ax.set_ylabel("execution-verified passes")
-    ax.set_title("Legacy overlapping suites: retention only")
+    ax.set_xticklabels([f"holdout ({o['total']} tasks)", "holdout accuracy (%)"])
+    ax.set_ylim(0, max(o["total"], c["total"], 100) + 2)
+    ax.set_ylabel("exact-match passes")
+    ax.set_title("Frozen held-out suite: retention only")
     ax.legend(facecolor=PANEL, edgecolor=BORDER, labelcolor=TEXT, fontsize=9)
     ax.grid(axis="y", alpha=0.3)
 
     ax = fig.add_subplot(gs[0, 1])
+    families = sorted(set(verdict["original"]["per_family"]) | set(verdict["candidate"]["per_family"]))
+    opf, cpf = verdict["original"]["per_family"], verdict["candidate"]["per_family"]
+    positions = range(len(families))
+    orig = [opf.get(f, {}).get("accuracy", 0.0) * 100 for f in families]
+    cand = [cpf.get(f, {}).get("accuracy", 0.0) * 100 for f in families]
+    ax.bar([p - width / 2 for p in positions], orig, width, color=MUTED, label="original")
+    ax.bar([p + width / 2 for p in positions], cand, width, color=ACCENT, label="candidate")
+    ax.set_xticks(list(positions))
+    ax.set_xticklabels(families, rotation=38, ha="right", fontsize=8)
+    ax.set_ylim(0, 104)
+    ax.set_ylabel("accuracy %")
+    ax.set_title("Per-family holdout accuracy")
+    ax.legend(facecolor=PANEL, edgecolor=BORDER, labelcolor=TEXT, fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+
+    ax = fig.add_subplot(gs[1, :])
+    ax.axis("off")
     steps, losses, avg = loss_curve(results)
     if steps:
         ax.plot(steps, losses, "o-", color=ACCENT, ms=4, label="step loss")
@@ -103,24 +113,16 @@ def main(argv=None):
         ax.legend(facecolor=PANEL, edgecolor=BORDER, labelcolor=TEXT, fontsize=9)
         ax.grid(alpha=0.3)
     else:
-        ax.text(0.5, 0.5, "No training loss log in this run", ha="center")
-        ax.axis("off")
-
-    ax = fig.add_subplot(gs[1, :])
-    ax.axis("off")
-    regressions = [f"{suite}:{task}" for suite, data in verdict["suites"].items()
-                   for task in data["per_task_regressions"]]
-    complete = all(s["task_comparison_complete"] for s in verdict["suites"].values())
-    note = (
-        f"Original: hard {bs['passed']}/{bs['total']}; base {bs2['passed']}/{bs2['total']}. "
-        f"Candidate: hard {cs['passed']}/{cs['total']}; base {cs2['passed']}/{cs2['total']}.\n"
-        "Both legacy suites overlap training: retention only, not held-out generalization evidence.\n"
-        "No automatic promotion. Ties show no proven improvement; keep the original unchanged.\n"
-        f"Per-task regressions: {', '.join(regressions) or 'none observed'}; "
-        f"task coverage {'complete' if complete else 'incomplete/unavailable'}.\n"
-        "Independent held-out evaluation is required; historic runs may differ in configuration/backend."
-    )
-    ax.text(0.01, 0.95, note, va="top", fontsize=10, color=MUTED, linespacing=1.7, wrap=True)
+        note = (
+            f"Original: {o['passed']}/{o['total']} exact matches; candidate: {c['passed']}/{c['total']}.\n"
+            f"Gains: {len(verdict['gains']) or 'none'}; regressions: {', '.join(verdict['regressions']) or 'none'}; "
+            f"ties: {verdict['ties']}.\n"
+            "Frozen fixtures measure structured reasoning, not general model quality; "
+            "prior exposure cannot be ruled out.\n"
+            "No automatic promotion. Ties show no proven improvement; keep the original unchanged.\n"
+            "Independent evaluation is still required; historic runs may differ in configuration/backend."
+        )
+        ax.text(0.01, 0.95, note, va="top", fontsize=10, color=MUTED, linespacing=1.7, wrap=True)
     try:
         with out.open("xb") as handle:
             fig.savefig(handle, format="png", dpi=150, facecolor=BG)
