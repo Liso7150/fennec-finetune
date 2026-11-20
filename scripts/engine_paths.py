@@ -5,7 +5,7 @@ Python launcher (`python c/coli serve ...`). Both speak the same OpenAI-compatib
 HTTP contract on the same default port, so a script only needs to know which argv
 prefix to build and which capabilities exist.
 
-This mirrors fennec-core's convention (fennec_core/engine.py::_engine_binary):
+This mirrors fennec-core's convention (engine.py::_engine_binary):
 probe `target/release`, `target/debug`, `.` for the fennec binary, else fall back
 to `c/coli`. Stdlib only - preflight must not import torch.
 """
@@ -19,11 +19,11 @@ from typing import NamedTuple
 FENNEC = "fennec"
 COLIBRI = "colibri"
 
-# Engine knobs a profile may pin for one measurement run. Each has a Fennec spelling
-# (`FENNEC_<NAME>`) that every child reads and, for a `c/coli` child, the legacy
-# `COLI_<NAME>` spelling that launcher was written against.
-KNOBS = ("MODEL", "API_KEY", "VULKAN", "METAL", "CUDA", "VK_TIER_HOST_GB", "VK_TIER_GB", "VK_DEV2")
-# Every Fennec spelling of those knobs, so a profile can scrub the shell it measures in.
+# The engine knobs these harnesses place. The native binary reads `FENNEC_<NAME>`
+# and nothing else; `COLI_<NAME>` is the name the legacy `c/coli` launcher was
+# written against, so it is only ever emitted for that child.
+KNOBS = ("MODEL", "API_KEY", "VULKAN", "METAL", "CUDA",
+         "VK_TIER_HOST_GB", "VK_TIER_GB", "VK_DEV2")
 FENNEC_VARS = frozenset("FENNEC_" + name for name in KNOBS)
 
 DEFAULT_PORT = 8184
@@ -31,10 +31,6 @@ DEFAULT_PORT = 8184
 
 class EngineError(RuntimeError):
     """No usable engine under the requested root."""
-
-
-class ColibriOnlyError(EngineError):
-    """The requested eval path has no Fennec equivalent; a Colibri checkout is required."""
 
 
 class Engine(NamedTuple):
@@ -76,8 +72,8 @@ def resolve(root) -> Engine:
         return Engine(COLIBRI, launcher, root)
     raise EngineError(
         f"no engine found under {root}: build Fennec (cargo build --release) so "
-        f"{root / 'target' / 'release' / binary_names()[0]} exists, or point --engine-root at "
-        "a Colibri checkout that still has c/coli")
+        f"{root / 'target' / 'release' / binary_names()[0]} exists, or point --engine-root "
+        "at a Colibri checkout that still has c/coli")
 
 
 def command(engine: Engine, args, *, python=None) -> list:
@@ -88,8 +84,8 @@ def command(engine: Engine, args, *, python=None) -> list:
     return [str(python or sys.executable), str(engine.binary), *argv]
 
 
-def serve_command(engine: Engine, model, port, *, host="127.0.0.1", extra=(), api_key=None,
-                  python=None) -> list:
+def serve_command(engine: Engine, model, port, *, host="127.0.0.1", extra=(),
+                  api_key=None, python=None) -> list:
     """`serve --auto-tier --model <dir> --host <host> --port <n>` for either engine.
 
     Fennec takes the key from `FENNEC_API_KEY`, which the caller pins; the Colibri
@@ -142,15 +138,3 @@ def pin(env, name, value, *, legacy=False) -> None:
     env["FENNEC_" + name] = str(value)
     if legacy:
         env["COLI_" + name] = str(value)
-
-
-def require_colibri(engine: Engine, capability) -> None:
-    """Refuse a Colibri-only path loudly: never fake an equivalent, never skip it."""
-    if not engine.is_fennec:
-        return None
-    raise ColibriOnlyError(
-        f"{engine.binary} is Fennec (native Rust), which has no equivalent for {capability}. "
-        "This eval path requires a Colibri checkout: pass --engine-root <colibri-dir> (or set "
-        "FENNEC_ENGINE_ROOT) pointing at a checkout that still has c/coli. Against Fennec use "
-        "the HTTP-only suites instead: scripts/bench_holdout.py, "
-        "scripts/bench_engine_vs_airllm.py or scripts/bench_tier_profiles.py.")
