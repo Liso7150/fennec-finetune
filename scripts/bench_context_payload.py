@@ -5,7 +5,7 @@ One fixed agent transcript, sent twice through /v1/chat/completions:
 
 * ``old`` - what the loop sent before fennec-core 1.4.1: every tool result
             sliced to 6,000 characters, duplicates repeated verbatim.
-* ``new`` - ``fennec_core.context.compact()`` with the shipped defaults.
+* ``new`` - ``context.compact()`` with the shipped defaults.
 
 Both arms keep the same system prompt, task, temperature 0 and max_tokens, and
 the arms alternate each pair so warm-up and prefix-cache drift land on both.
@@ -35,7 +35,7 @@ RESULTS = Path(__file__).resolve().parents[1] / "results"
 
 def _core_root(explicit):
     root = Path(explicit) if explicit else Path(__file__).resolve().parents[2] / "fennec-core"
-    if (root / "fennec_core").is_dir() and str(root) not in sys.path:
+    if (root / "context.py").is_file() and str(root) not in sys.path:
         sys.path.insert(0, str(root))
     return root
 
@@ -171,7 +171,8 @@ def main(argv=None):
     if args.pairs < 1:
         raise SystemExit("--pairs must be >= 1")
     _core_root(args.core_root)
-    from fennec_core import context  # imported after the path fix
+    from importlib import import_module
+    context = import_module("context")  # imported after the path fix
 
     old = old_messages()
     new, stats = new_messages(context)

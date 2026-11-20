@@ -136,19 +136,19 @@ per-prompt output: [`results/engine_vs_airllm.md`](results/engine_vs_airllm.md).
 
 ## Context-payload benchmark (old loop vs 1.4.1 compaction) — historical
 
-Measured 2026-11-10 before the 1.0.0 engine switch; `fennec_core.context.compact()`
+Measured 2026-11-10 before the 1.0.0 engine switch; `context.compact()`
 itself is current and still ships in fennec-core.
 
 `scripts/bench_context_payload.py` replays one fixed agent transcript through an
 already-running engine twice: the pre-1.4.1 payload (each tool result sliced to
-6,000 characters, duplicates repeated verbatim) and `fennec_core.context.compact()`.
+6,000 characters, duplicates repeated verbatim) and `context.compact()`.
 The arms alternate so warm-up drift lands on both; both are greedy with the same
 `max_tokens`. It writes `results/context_payload.{json,md}`.
 
 Measured 2026-11-10, `qwen3.6-colibri` (Vulkan, `--ctx 16384`, `max_tokens 8`,
 2 pairs): **9,594 -> 6,995 prompt tokens, TTFT 70.70 s -> 51.14 s per step
 (-19.56 s, -27.7 %)**. The script never starts or stops the engine, and it needs
-only the standard library plus `fennec_core/context.py`, so it runs on any
+only the standard library plus `context.py`, so it runs on any
 Python 3.10+.
 
     python scripts/bench_context_payload.py --base-url http://127.0.0.1:8197 --exact-usage

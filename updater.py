@@ -59,7 +59,7 @@ def check_stable(current_version: str) -> Optional[Release]:
 
 
 def check_experimental() -> Optional[Release]:
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/master"
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "fennec-updater"})
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -91,7 +91,7 @@ def update(experimental: bool = False) -> str:
     current = "1.0.0"
     
     if experimental:
-        print("[update] Checking experimental channel (master branch)...")
+        print("[update] Checking experimental channel (main branch)...")
         release = check_experimental()
         if release is None:
             return "Already on latest experimental build"
