@@ -1,10 +1,10 @@
-![Fennec Fine-tune 1.0.0 — streamed LoRA fine-tuning of large MoE models (Qwen3.6-35B-A3B) on a small GPU, built on AirLLM, plus the benchmark harnesses that decide whether a candidate is worth keeping. Python 3.10+, CUDA 8 GB, LoRA not QLoRA, 96 tests, 60 holdout cases, MIT license.](docs/hero.png)
+![Fennec Fine-tune 1.0.0 — streamed LoRA fine-tuning of large MoE models (Qwen3.6-35B-A3B) on a small GPU, built on AirLLM, plus the benchmark harnesses that decide whether a candidate is worth keeping. Python 3.10+, CUDA 8 GB, LoRA not QLoRA, 105 tests, 60 holdout cases, MIT license.](docs/hero.png)
 
 ## At a glance
 
 | Tests | Test files | Holdout cases | Families | Pipeline scripts | int4 weights |
 |---|---|---|---|---|---|
-| 96 | 3 | 60 | 12 | 11 | 22.777 GiB |
+| 105 | 4 | 60 | 12 | 11 | 22.777 GiB |
 
 Sources: counted in `tests/` and `scripts/`; `scripts/bench_holdout.py` (12 families × 5
 cases); `results/preflight_qwen36_35b_ctx8192.json`.
@@ -186,7 +186,7 @@ not a Fennec figure.
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 96 checks across 3 files
+python -m unittest discover -s tests          # 105 checks across 4 files
 ```
 
 Hermetic: sockets mocked, no engine, no model, no network. `test_pipeline_safety.py` imports `torch`

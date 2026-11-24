@@ -4,37 +4,38 @@ All notable changes to fennec-finetune, the AirLLM streamed LoRA pipeline and be
 harness.
 
 The sections below carry the published tag each change actually shipped in
-(`Liso7150/fennec-finetune`, `v0.3.0` … `v0.9.0`). An earlier revision of this
+(`Liso7150/fennec-finetune`, `v0.3.0` … `v1.0.0`). An earlier revision of this
 file numbered the same history on a 1.x/2.x ladder that was never published;
 those tags still exist locally (`v1.5.0` … `v2.0.0`) and each one points at the
 same commit as a published `v0.x` tag. The first release here was `0.3.0`, and
 `0.7.0`, `0.7.1`, `0.8.0` and `0.9.0` all point at the same commit as `0.6.0` —
 no new code shipped in them. Dates are the tag publish dates.
 
-## [Unreleased] — 1.0.0 in preparation
-
-Nothing at 1.0.0 is published. The newest release here is `v0.9.0`
-(2026-11-11T19:29Z). Test counts come from the results hub
-(`benchmarks/artifacts/hub/RESULTS.json`, updated 2026-11-24T07:29:28Z): its
+## [1.0.0] - 2026-11-24
+Version 1.0.0 is the current release.
+Test counts come from the results hub
+(`benchmarks/artifacts/hub/RESULTS.json`, updated 2026-11-24T13:27:28Z): its
 `finetune` lane runs `python -m unittest discover -s tests` and reports
-**96 passed / 0 failed / 0 skipped** (measured 2026-11-24T05:47:09Z) — the hub's
+**105 passed / 0 failed / 0 skipped** (measured 2026-11-24T13:27:28Z) — the hub's
 unittest parser reads `Ran N tests` and subtracts its own skips, so it carries no
 subtest figure. Re-measured in this session two ways: that same unittest command
-gives `Ran 96 tests … OK`, and `python -m pytest tests -q` gives
-`96 passed, 162 subtests passed` — the 162 holds, the 100 this file quoted did not.
+gives `Ran 105 tests … OK`, and `python -m pytest tests -q` gives
+`105 passed, 162 subtests passed` — the 162 holds, the 100 this file quoted did not.
 Suite-wide totals live in the hub, not here.
 
 ### Added
 - README hero published, with the baselines it cites
-- Every measured knob pinned under both the `FENNEC_*` and `COLI_*` spellings
+- Every measured knob pinned under the native engine's `FENNEC_*` spelling; stale
+  `COLI_*` exports are scrubbed rather than mirrored
 - `updater.py`: `python updater.py` compares the installed tree against the newest
   GitHub Release for this repo and applies it; `--experimental` polls the `main`
   branch instead of a tag
 
 ### Changed
-- Both spellings are stripped from the parent config, so the child wins
-- The engine knobs are single-spelled: the harness pins `FENNEC_*` and emits the
-  `COLI_*` names only when the resolved child is the legacy `c/coli` launcher
+- Stale `COLI_*` names are stripped from the parent environment, so the child receives
+  only the `FENNEC_*` knobs it reads
+- Engine resolution is Fennec-only: `FENNEC_ENGINE_ROOT`, then `FENNEC_HOME`, then
+  `~/Fennec`; there is no Colibri launcher or alternate-engine fallback
 - The benchmark checkpoints moved out of the MEGA-synced `colibri-models`
   directory into a dedicated `fennec-models` root (`FENNEC_MODELS`, which defaults
   under the user home)
@@ -47,6 +48,9 @@ Suite-wide totals live in the hub, not here.
   `require_colibri` guard were removed rather than left untestable
 
 ### Fixed
+- Stable updater downloads now require a valid exact-basename `SHA256SUMS`
+  entry and matching digest before staging; missing or malformed manifests fail
+  closed
 - `python updater.py --help` ran the update instead of describing it: the entry
   point tested only for `--experimental` and ignored every other argument, so a
   conventional help flag reached the network and the `.new` write. `-h` and
