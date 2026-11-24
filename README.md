@@ -1,10 +1,10 @@
-![Fennec Fine-tune 1.0.0 — streamed LoRA fine-tuning of large MoE models (Qwen3.6-35B-A3B) on a small GPU, built on AirLLM, plus the benchmark harnesses that decide whether a candidate is worth keeping. Python 3.10+, CUDA 8 GB, LoRA not QLoRA, 100 tests, 60 holdout cases, MIT license.](docs/hero.png)
+![Fennec Fine-tune 1.0.0 — streamed LoRA fine-tuning of large MoE models (Qwen3.6-35B-A3B) on a small GPU, built on AirLLM, plus the benchmark harnesses that decide whether a candidate is worth keeping. Python 3.10+, CUDA 8 GB, LoRA not QLoRA, 96 tests, 60 holdout cases, MIT license.](docs/hero.png)
 
 ## At a glance
 
 | Tests | Test files | Holdout cases | Families | Pipeline scripts | int4 weights |
 |---|---|---|---|---|---|
-| 100 | 3 | 60 | 12 | 11 | 22.777 GiB |
+| 96 | 3 | 60 | 12 | 11 | 22.777 GiB |
 
 Sources: counted in `tests/` and `scripts/`; `scripts/bench_holdout.py` (12 families × 5
 cases); `results/preflight_qwen36_35b_ctx8192.json`.
@@ -57,13 +57,13 @@ Weights tier to the host pool; KV stays in memory. Evidence:
 [`results/preflight_qwen36_35b_ctx8192.json`](results/preflight_qwen36_35b_ctx8192.json).
 Reproduce with `fennec preflight --model <model-dir> --ctx 8192 --json`.
 
-## Engine: Fennec first, Colibri as fallback
+## Engine: Fennec only
 
 Every script that starts an engine resolves it through
 [`scripts/engine_paths.py`](scripts/engine_paths.py), the same convention `fennec-core`
-uses: probe `target/release`, `target/debug`, then the engine root for `fennec.exe`/`fennec`,
-and fall back to `c/coli` when no Fennec binary exists. Fennec is native Rust and
-self-launches — no Python prefix:
+uses: probe `target/release`, `target/debug`, then the engine root for `fennec.exe`/`fennec`.
+Fennec is native Rust and self-launches — no Python prefix — and it is the **only** engine;
+the upstream Colibri launcher is retired and is never resolved or started:
 
 ```bash
 cd ~/Fennec && cargo build --release
@@ -71,22 +71,22 @@ cd ~/Fennec && cargo build --release
   --host 127.0.0.1 --port 8184
 ```
 
-`--engine-root` (or `FENNEC_ENGINE_ROOT` / `FENNEC_HOME`) selects the checkout; the default prefers
-`~/Fennec` over `~/Colibri`. Both engines speak the same OpenAI-compatible HTTP contract on port 8184.
-The native binary reads one spelling of each knob, `FENNEC_*` (`FENNEC_MODEL`, `FENNEC_API_KEY`,
-`FENNEC_VULKAN`, `FENNEC_METAL`, `FENNEC_CUDA`, `FENNEC_VK_TIER_HOST_GB`); a `c/coli` child is handed
-the same values under the `COLI_*` names its launcher was written against.
+`--engine-root` (or `FENNEC_ENGINE_ROOT` / `FENNEC_HOME`) selects the checkout; the default is
+`~/Fennec`. The engine speaks the OpenAI-compatible HTTP contract on port 8184 and reads one
+spelling of each knob, `FENNEC_*` (`FENNEC_MODEL`, `FENNEC_API_KEY`, `FENNEC_VULKAN`,
+`FENNEC_METAL`, `FENNEC_CUDA`, `FENNEC_VK_TIER_HOST_GB`). Nothing is written under the retired
+`COLI_*` names; stale `COLI_*` shell exports are scrubbed before a measurement run so they
+cannot influence it.
 
-| Script | Fennec | Colibri fallback |
-|---|---|---|
-| `bench_holdout.py`, `bench_context_payload.py` | yes (HTTP only, engine never started) | yes |
-| `bench_engine_vs_airllm.py`, `bench_tier_profiles.py` | yes (starts `fennec serve`) | yes (`python c/coli serve`) |
-| `run_finetune_eval.py` | yes (`target/release/fennec` directly) | no: `quant` and `--fq4` are Fennec commands |
+| Script | Engine |
+|---|---|
+| `bench_holdout.py`, `bench_context_payload.py` | Fennec (HTTP only, engine never started) |
+| `bench_engine_vs_airllm.py`, `bench_tier_profiles.py` | Fennec (starts `fennec serve`) |
+| `run_finetune_eval.py` | Fennec (`target/release/fennec` directly; `quant` and `--fq4` are Fennec commands) |
 
 `run_finetune_eval.py` needs a Fennec checkout under `--engine-root` because its quant and serve
-stages are Fennec's own commands; the resolution helpers still cover both engines for the benches.
-Models without a Fennec build are evaluated by pointing `bench_holdout.py` at any
-OpenAI-compatible endpoint instead.
+stages are Fennec's own commands. Models without a Fennec build are evaluated by pointing
+`bench_holdout.py` at any OpenAI-compatible endpoint instead.
 
 ## Usage
 
@@ -139,9 +139,10 @@ not used for training; scores are not a statistical-significance claim and do no
 
 ## Engine vs AirLLM inference benchmark
 
-`scripts/bench_engine_vs_airllm.py` compares the engine — Fennec, or a Colibri checkout as
-the fallback — with AirLLM-only inference on the same machine and prompts, and writes
-`results/engine_vs_airllm.{json,md}`. The report labels whichever engine actually ran.
+`scripts/bench_engine_vs_airllm.py` compares the Fennec engine — the only engine — with
+AirLLM-only inference on the same machine and prompts, and writes
+`results/engine_vs_airllm.{json,md}`. AirLLM is a training/inference library, not an engine
+competitor; the comparison measures whether keeping the engine is worth it.
 
 ```bash
 python scripts/bench_engine_vs_airllm.py --backend both --tokens 32 --airllm-tokens 4
@@ -161,8 +162,8 @@ engine twice: the old payload (tool results sliced to 6,000 characters, duplicat
 and `context.compact()`. Arms alternate so warm-up drift lands on both; both are greedy
 with the same `max_tokens`. Writes `results/context_payload.{json,md}`.
 
-Measured 2026-11-10 against `qwen3.6-colibri` (Vulkan, `--ctx 16384`, `max_tokens 8`,
-`temperature 0`, 2 order-counterbalanced pairs):
+Measured 2026-11-10 against the `qwen3.6-colibri` checkpoint (Vulkan, `--ctx 16384`,
+`max_tokens 8`, `temperature 0`, 2 order-counterbalanced pairs):
 
 | Arm | Payload chars | Prompt tokens | Median TTFT |
 |---|---|---|---|
@@ -185,7 +186,7 @@ not a Fennec figure.
 ## Tests
 
 ```bash
-python -m pytest tests          # 100 checks across 3 files
+python -m unittest discover -s tests          # 96 checks across 3 files
 ```
 
 Hermetic: sockets mocked, no engine, no model, no network. `test_pipeline_safety.py` imports `torch`
@@ -205,6 +206,6 @@ features — no `requirements.txt`, `setup.py` or `pyproject.toml` here. Install
 [AirLLM](https://github.com/lyogavin/airllm) — layer-streamed inference and the streamed
 LoRA trainer. [Fennec](https://github.com/Liso7150/fennec) — the native Rust engine that
 quantises the merged shards and serves both models for the holdout.
-[JustVugg/colibri](https://github.com/JustVugg/colibri) — the engine Fennec was built to
-replace, and the fallback `engine_paths.py` still resolves for the HTTP benches. Part of the
+[JustVugg/colibri](https://github.com/JustVugg/colibri) — the base idea Fennec was built from;
+the upstream engine is retired and no longer resolved or launched. Part of the
 [Fennec suite](https://github.com/Liso7150/fennec-environment-setup).

@@ -14,8 +14,15 @@ no new code shipped in them. Dates are the tag publish dates.
 ## [Unreleased] — 1.0.0 in preparation
 
 Nothing at 1.0.0 is published. The newest release here is `v0.9.0`
-(2026-11-11T19:29Z). Measured on the working tree: 100 tests passed plus 162
-subtests (`python -m pytest tests -q`, 2026-11-21).
+(2026-11-11T19:29Z). Test counts come from the results hub
+(`benchmarks/artifacts/hub/RESULTS.json`, updated 2026-11-24T07:29:28Z): its
+`finetune` lane runs `python -m unittest discover -s tests` and reports
+**96 passed / 0 failed / 0 skipped** (measured 2026-11-24T05:47:09Z) — the hub's
+unittest parser reads `Ran N tests` and subtracts its own skips, so it carries no
+subtest figure. Re-measured in this session two ways: that same unittest command
+gives `Ran 96 tests … OK`, and `python -m pytest tests -q` gives
+`96 passed, 162 subtests passed` — the 162 holds, the 100 this file quoted did not.
+Suite-wide totals live in the hub, not here.
 
 ### Added
 - README hero published, with the baselines it cites
@@ -28,8 +35,9 @@ subtests (`python -m pytest tests -q`, 2026-11-21).
 - Both spellings are stripped from the parent config, so the child wins
 - The engine knobs are single-spelled: the harness pins `FENNEC_*` and emits the
   `COLI_*` names only when the resolved child is the legacy `c/coli` launcher
-- The benchmark checkpoints moved to `D:/fennec-models` (was the MEGA-synced
-  `colibri-models` directory)
+- The benchmark checkpoints moved out of the MEGA-synced `colibri-models`
+  directory into a dedicated `fennec-models` root (`FENNEC_MODELS`, which defaults
+  under the user home)
 - `run_finetune_eval.py` runs the whole chain on Fennec: `fennec quant --layers all`
   writes the FQ4 sidecar into the run directory, baseline and candidate are each
   served by `target/release/fennec serve --fq4`, and the verdict comes from the
@@ -37,6 +45,12 @@ subtests (`python -m pytest tests -q`, 2026-11-21).
   `bench_best_model.py` chain is gone — that harness no longer ships in a Colibri
   checkout, so its `--candidate` stage, `compare_results()` and the
   `require_colibri` guard were removed rather than left untestable
+
+### Fixed
+- `python updater.py --help` ran the update instead of describing it: the entry
+  point tested only for `--experimental` and ignored every other argument, so a
+  conventional help flag reached the network and the `.new` write. `-h` and
+  `--help` now print the usage and exit before `update()` is called
 
 ## [0.9.0] - 2026-11-11
 
