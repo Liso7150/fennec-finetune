@@ -12,9 +12,9 @@ the VRAM budget, the host-RAM expert pool (`FENNEC_VK_TIER_HOST_GB`) and the CPU
 thread count. NPU is absent on purpose: `--xdna` is AMD-only and the Intel NPU
 has no path into the engine.
 
-The engine is resolved by engine_paths: Fennec's native binary self-launches,
-and a Colibri checkout (`python c/coli serve`) is the fallback. `--auto-tier` is
-always applied, so the profiles below only carry what differs between them.
+The engine is resolved by engine_paths: Fennec's native binary self-launches and
+is the only engine; the retired Colibri launcher is never resolved. `--auto-tier`
+is always applied, so the profiles below only carry what differs between them.
 
 Results: results/tier_profiles.{json,md}
 """
@@ -113,7 +113,7 @@ def stream(base, model, max_tokens):
 
 
 def stop_tree(process):
-    """Kill the engine tree (Colibri's launcher plus its child); on Windows terminate() orphans it."""
+    """Kill the engine process tree; on Windows terminate() can orphan children."""
     if process.poll() is not None:
         return
     if os.name == "nt":
@@ -131,14 +131,13 @@ def run_profile(name, extra_env, extra_args, args, engine):
     port = free_port()
     base = f"http://127.0.0.1:{port}"
     log = RESULTS / f"tier-{name.replace(' ', '-').replace('+', '')}.log"
-    # The profiles name each knob in Fennec's spelling. A c/coli child is served
-    # the same values under the COLI_* names its launcher reads.
+    # The profiles name each knob in Fennec's spelling, the only spelling the
+    # native binary reads; stale COLI_* exports are stripped, never mirrored.
     env = engine_env({**extra_env, "FENNEC_API_KEY": "local"},
-                     base=strip_engine_vars(os.environ), legacy=not engine.is_fennec)
+                     base=strip_engine_vars(os.environ))
     env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     command = serve_command(engine, args.model, port,
-                            extra=["--ctx", str(args.ctx), "--ngen", str(args.ngen), *extra_args],
-                            api_key="local")
+                            extra=["--ctx", str(args.ctx), "--ngen", str(args.ngen), *extra_args])
     report = {"profile": name, "engine": engine.kind, "args": extra_args,
               "env": extra_env, "log": str(log)}
     started = time.monotonic()
@@ -164,9 +163,9 @@ def run_profile(name, extra_env, extra_args, args, engine):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--engine-root", default=default_engine_root(),
-                        help="Fennec checkout (target/release/fennec) or a Colibri checkout with c/coli")
+                        help="Fennec checkout (target/release/fennec); Fennec is the only engine")
     parser.add_argument("--model", default=env_alias("MODEL") or "",
-                        help="model directory; FENNEC_MODEL or COLI_MODEL")
+                        help="model directory; FENNEC_MODEL")
     parser.add_argument("--ctx", type=int, default=8192)
     parser.add_argument("--ngen", type=int, default=128)
     parser.add_argument("--tokens", type=int, default=64)
@@ -175,7 +174,7 @@ def main(argv=None):
     parser.add_argument("--out", default=str(RESULTS / "tier_profiles"))
     args = parser.parse_args(argv)
     if not args.model:
-        raise SystemExit("--model or FENNEC_MODEL (or COLI_MODEL) is required")
+        raise SystemExit("--model or FENNEC_MODEL is required")
     try:
         engine = resolve(args.engine_root)
     except EngineError as exc:

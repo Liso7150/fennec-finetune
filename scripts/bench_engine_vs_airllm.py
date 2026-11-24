@@ -5,9 +5,10 @@
 
 * engine  - starts `fennec serve` on a free loopback port and streams the fixed
             prompts through /v1/chat/completions, recording time-to-first-token
-            and decode tokens/second. Fennec's native binary self-launches; a
-            Colibri checkout (`python c/coli serve`) is the fallback, resolved by
-            engine_paths exactly as fennec-core does.
+            and decode tokens/second. Fennec's native binary self-launches and
+            is the only engine, resolved by engine_paths exactly as fennec-core
+            does. AirLLM is a training/inference library, not an engine
+            competitor; this is a keep-the-engine-or-not measurement.
 * airllm  - loads a model through AirLLM's layer streaming (no engine code) and
             generates the same prompts greedily. AirLLM returns the sequence in
             one call, so its end-to-end figure includes prefill; the timed 1-token
@@ -208,19 +209,16 @@ def bench_engine(args):
     log_path = RESULTS / "engine_vs_airllm_engine.log"
     # Every knob starts from a stripped environment: one stale GPU request in the
     # shell must not decide what the cpu and default arms measure.
-    legacy = not engine.is_fennec
     env = engine_env({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-                     base=strip_engine_vars(os.environ), legacy=legacy)
+                     base=strip_engine_vars(os.environ))
     if args.backend_engine == "vulkan":
-        pin(env, "VULKAN", "1", legacy=legacy)
+        pin(env, "VULKAN", "1")
     if args.engine_api_key:
-        # Both engines take the key from the environment; the launcher also takes --api-key.
-        pin(env, "API_KEY", args.engine_api_key, legacy=legacy)
+        # Fennec takes the key from the environment; there is no --api-key flag.
+        pin(env, "API_KEY", args.engine_api_key)
     command = serve_command(engine, Path(args.model).resolve(), port,
                             extra=["--policy", "quality", "--ctx", "4096",
-                                   "--ngen", str(args.tokens + 16)],
-                            api_key=args.engine_api_key,
-                            python=args.engine_python or str(Path(sys.executable)))
+                                   "--ngen", str(args.tokens + 16)])
     started = time.monotonic()
     with log_path.open("wb") as log:
         process = subprocess.Popen(command, cwd=str(engine.root), stdout=log, stderr=subprocess.STDOUT,
@@ -345,8 +343,9 @@ def bench_airllm(args):
 
 
 def engine_label(engine):
-    """Name the engine that actually ran; archived reports predate the Fennec port."""
-    return "Fennec engine" if (engine or {}).get("engine") == "fennec" else "Colibri engine"
+    """Name the engine that ran. Fennec is the only engine this suite launches,
+    so every report - including a failed resolve - is a Fennec report."""
+    return "Fennec engine"
 
 
 def verdict(engine, airllm):
@@ -434,9 +433,10 @@ def main(argv=None):
     ap.add_argument("--prompts", type=int, default=len(PROMPTS),
                     help=f"how many of the {len(PROMPTS)} fixed prompts to run")
     ap.add_argument("--engine-root", default=default_engine_root(),
-                    help="Fennec checkout (target/release/fennec) or a Colibri checkout with c/coli")
+                    help="Fennec checkout (target/release/fennec); Fennec is the only engine")
     ap.add_argument("--engine-python", default=None,
-                    help="interpreter for the Colibri launcher; ignored by the native Fennec binary")
+                    help="retired: the Colibri launcher interpreter; Fennec's native binary "
+                         "self-launches, so passing this flag is an error")
     ap.add_argument("--engine-api-key", default="local")
     ap.add_argument("--model", default=os.environ.get("FENNEC_ENGINE_MODEL") or env_alias("MODEL") or
                     str(Path(os.environ.get("FENNEC_MODELS") or Path.home() / "fennec-models") / "qwen36-35b"))
@@ -452,6 +452,9 @@ def main(argv=None):
     ap.add_argument("--startup-timeout", type=int, default=600)
     ap.add_argument("--out-dir", default=str(RESULTS))
     args = ap.parse_args(argv)
+    if args.engine_python:
+        ap.error("--engine-python is retired: Fennec is the only engine and its native "
+                 "binary self-launches; remove the flag")
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     args.prompt_list = PROMPTS[:max(1, min(args.prompts, len(PROMPTS)))]
